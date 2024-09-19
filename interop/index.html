@@ -51,10 +51,49 @@ async function runUnidirectionalTest() {
     transport.close()
 }
 
+// In this test, we open 5 bidirectional streams, read the data, and send it back to the server.
+async function runBidirectionalTest() {
+    const transport = await establishSession('https://127.0.0.1:12345/bidirectional');
+
+    let failed = false
+    for(let i = 0; i < 5; i++) {
+        const stream = await transport.createBidirectionalStream();
+        console.log(`Opened stream ${i}.`)
+        const reader = stream.readable.getReader();
+        const writer = stream.writable.getWriter();
+
+        const data = new Uint8Array(%%LEN%%);
+        let bytesReceived = 0;
+        while (bytesReceived < %%LEN%%) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            data.set(value, bytesReceived);
+            bytesReceived += value.length;
+        }
+
+        writer.write(data);
+
+        try {
+            await writer.close();
+            console.log(`All data has been sent on stream ${i}.`);
+        } catch (error) {
+            console.error(`An error occurred: ${error}`);
+            failed = true
+        }
+    }
+    if(!failed) { testSucceeded() }
+    transport.close()
+}
+
+
 (async function() {
     switch("%%TEST%%") {
     case "unidirectional":
         await runUnidirectionalTest()
+        break
+    case "bidirectional":
+        await runBidirectionalTest()
         break
     }
 })()

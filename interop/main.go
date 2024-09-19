@@ -17,6 +17,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,18 +65,34 @@ func main() {
 		}
 		runUnidirectionalTest(conn)
 	})
+	wmux.HandleFunc("/bidirectional", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := s.Upgrade(w, r)
+		if err != nil {
+			log.Printf("upgrading failed: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		runBidirectionalTest(conn)
+	})
 	if err := s.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func runHTTPServer(certHash [32]byte) {
+	content := strings.ReplaceAll(indexHTML, "%%CERTHASH%%", formatByteSlice(certHash[:]))
+	content = strings.ReplaceAll(content, "%%DATA%%", formatByteSlice(data))
+	content = strings.ReplaceAll(content, "%%LEN%%", strconv.Itoa(len(data)))
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webtransport", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Println("handler hit")
-		content := strings.ReplaceAll(indexHTML, "%%CERTHASH%%", formatByteSlice(certHash[:]))
-		content = strings.ReplaceAll(content, "%%DATA%%", formatByteSlice(data))
-		content = strings.ReplaceAll(content, "%%TEST%%", "unidirectional")
+	mux.HandleFunc("/unidirectional", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Println("unidirectional handler hit")
+		content := strings.ReplaceAll(content, "%%TEST%%", "unidirectional")
+		w.Write([]byte(content))
+	})
+	mux.HandleFunc("/bidirectional", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Println("bidirectional handler hit")
+		content := strings.ReplaceAll(content, "%%TEST%%", "bidirectional")
 		w.Write([]byte(content))
 	})
 	http.ListenAndServe("localhost:8080", mux)
@@ -94,6 +111,38 @@ func runUnidirectionalTest(sess *webtransport.Session) {
 		if err != nil {
 			log.Fatalf("failed to read all data: %v", err)
 		}
+		if !bytes.Equal(rvcd, data) {
+			log.Fatal("data doesn't match")
+		}
+	}
+	select {
+	case <-sess.Context().Done():
+		fmt.Println("done")
+	case <-time.After(5 * time.Second):
+		log.Fatal("timed out waiting for the session to be closed")
+	}
+}
+
+func runBidirectionalTest(sess *webtransport.Session) {
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		str, err := sess.AcceptStream(ctx)
+		if err != nil {
+			log.Fatalf("failed to accept bidirectional stream: %v", err)
+		}
+
+		_, err = str.Write(data)
+		if err != nil {
+			log.Fatalf("failed to write data: %v", err)
+		}
+
+		rvcd, err := io.ReadAll(str)
+		if err != nil {
+			log.Fatalf("failed to read all data: %v", err)
+		}
+
 		if !bytes.Equal(rvcd, data) {
 			log.Fatal("data doesn't match")
 		}
